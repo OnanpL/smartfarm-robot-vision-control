@@ -32,9 +32,3 @@
    ```bash
    python main_controller.py
    ```
-
-## 남은 작업 (다음 단계)
-
-- `target_zone`(특정 구역 지정 복귀) 아두이노 펌웨어 구현
-- `CROP_COLOR_PROFILES`의 `disease_threshold` 실측 보정
-- AWS 서버 실제 배포 후 `config.py` TODO 값 교체
