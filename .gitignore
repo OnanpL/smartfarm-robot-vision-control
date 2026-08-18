@@ -1,0 +1,8 @@
+﻿config.py
+.env
+certs/
+__pycache__/
+*.pyc
+captures/*
+!captures/.gitkeep
+.ipynb_checkpoints/
