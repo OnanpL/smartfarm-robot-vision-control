@@ -5,13 +5,6 @@ main_controller.py
 ⭐ 이 파일만 4개 모듈(vision/motion/mqtt/upload)의 존재를 전부 알고 있다.
    모듈끼리는 서로를 import하지 않는다 — 항상 이 컨트롤러를 거쳐서만 연결된다.
 
-★★★★★ 최종 반영 사항 (누적 피드백 전부 통합) ★★★★★
-
-9. [온습도 센서] 문서 3-3(handle_env_log) 규격 반영. 아두이노가 텔레메트리에
-   HUM 필드를 추가로 보내면(_publish_env_log), 60초 주기로 MQTT 발행한다.
-   ⚠️ 토픽명이 문서에 명시되어 있지 않아 "ddalgi/robot/env"로 임시 지정
-   (서버 팀 확인 필요). 아두이노 쪽 실제 센서는 아직 미장착 상태(-1.0
-   placeholder)라, 값이 유효할 때만(0 이상) 실제로 발행한다.
 """
 
 import os
@@ -27,6 +20,7 @@ from modules.vision_module import VisionModule
 from modules.motion_module import MotionModule
 from modules.mqtt_module import MQTTModule
 from modules.upload_module import UploadModule
+from modules.env_sensor_module import EnvSensorModule
 
 
 class RobotController:
@@ -56,6 +50,9 @@ class RobotController:
 
         print("[초기화] HTTP 업로드 모듈 준비 중...")
         self.uploader = UploadModule(self.cfg)
+        
+        print("[초기화] 온습도 센서 모듈 준비 중 (라즈베리파이 직결)...")
+        self.env_sensor = EnvSensorModule(self.cfg)
 
         # ── ★ 비동기 추론용 큐/스레드 ──
         # ★ 카메라 대수만큼은 한 번에 큐에 들어갈 수 있어야 밀리지 않음
@@ -117,6 +114,10 @@ class RobotController:
                 detections, zone_id, now_str = self._result_queue.get_nowait()
             except queue.Empty:
                 return
+            
+            if not detections:
+                print(f"  [{now_str}] zone={zone_id} - 해당 사항 없음 (탐지된 객체 없음)")
+                continue   # 아래 for문은 건너뜀
 
             for detection in detections:
                 alert_flags = []
@@ -138,6 +139,16 @@ class RobotController:
         # ★ 내부 클래스명 -> 서버로 실제 전송할 crop_id로 변환 (예: k_melon -> oriental_melon)
         crop_id = self.cfg.get("crop_id_map", {}).get(detection.crop_id, detection.crop_id)
 
+        # ★ 탐지된 객체(박스) 이미지를 로컬 capture 폴더에도 저장
+        if self.cfg.get("save_detected_boxes", True):
+            box_filename = f"{batch_id}_{detection.crop_id}.jpg"
+            box_dir = os.path.join(self.cfg["capture_dir"], "detected_boxes")
+            os.makedirs(box_dir, exist_ok=True)
+            box_path = os.path.join(box_dir, box_filename)
+            success = cv2.imwrite(box_path, detection.box_bgr)
+        if not success:
+            print(f"  ❌ 탐지 객체 이미지 저장 실패: {box_path}")
+
         # 1) HTTP: 이미지 + user_id + robot_id + batch_id 만
         self.uploader.upload(detection.box_bgr, batch_id)
 
@@ -147,13 +158,13 @@ class RobotController:
             "robot_id": self.cfg["robot_id"],
             "batch_id": batch_id,
             "crop_id": crop_id,
-            "growth_status": detection.growth_status,     # 소수점 1자리 문자열
-            "health_status": detection.health_status,     # "disease" / "NORMAL"
+            "growth_status": detection.growth_status,
+            "health_status": detection.health_status,
             "zone_id": zone_id,
         }
         self.comm.publish(self.cfg["crop_meta_topic"], meta_payload)
 
-    # ── 아두이노 텔레메트리 -> 서버 상태 보고 (문서 3-1 규격) ──
+        # ── 아두이노 텔레메트리 -> 서버 상태 보고 (문서 3-1 규격) ──
     def _poll_and_publish_telemetry(self):
         telemetry = self.motion.read_telemetry()
         if telemetry is None:
@@ -192,26 +203,20 @@ class RobotController:
         if caps and self.cfg.get("show_preview", True):
             cv2.destroyAllWindows()
 
-    # ── ★ 온습도 센서 보고 (문서 3-3 handle_env_log 규격) ──
-    # ⚠️ 토픽명이 문서에 명시되어 있지 않아, 3-1("ddalgi/robot/status")과 같은
-    #   네이밍 규칙을 따라 "ddalgi/robot/env"로 임시 지정했다. 서버 팀 확인 필요.
+    # ── ★ 온습도 센서 보고 (문서 3-3 handle_env_log 규격)
     def _publish_env_log(self):
-        telemetry = self.motion.get_latest_telemetry()
-        if telemetry is None:
+        temperature_c, humidity_percent = self.env_sensor.read()
+
+        # 센서가 없거나 이번 판독이 실패했으면(DHT 계열 특성상 흔함) 그냥 건너뜀
+        if temperature_c is None:
+            print("❌ 온습도 센서를 읽을 수 없습니다. 연결 상태를 확인하세요.")
             return
-
-        temperature_c = telemetry.get("temperature_c")
-        humidity_percent = telemetry.get("humidity_percent")
-
-        # 아두이노 쪽에 실제 센서가 아직 연결 안 됐으면 -1.0 placeholder이므로 스킵
-        if temperature_c is None or temperature_c < 0:
-            return
-
+        else: print(f"  [Env] 온도={temperature_c:.1f}°C, 습도={humidity_percent:.1f}%")
         env_payload = {
             "user_id": self.cfg["user_id"],
             "robot_id": self.cfg["robot_id"],
             "temperature": temperature_c,
-            "humidity": humidity_percent if humidity_percent is not None and humidity_percent >= 0 else None,
+            "humidity": humidity_percent,
         }
         print(f"  [Env] {env_payload}")
         self.comm.publish(self.cfg["env_topic"], env_payload)
@@ -230,10 +235,9 @@ class RobotController:
         exit_hint = "'q'를 누르면 종료" if self.cfg.get("show_preview", True) else "Ctrl+C로 종료"
         print(f"🚀 스마트팜 로봇 제어 시작... (대기 중 - 순찰 시작 시 카메라 활성화, {exit_hint})")
 
-        # ★ [캡처 트리거 변경] 더 이상 타이머로 "N초마다 찍어라"가 아니라,
-        # 아두이노가 마커에서 자연스럽게 멈추는 순간(원래 구역 카운트용으로
-        # 쓰던 그 정지)을 감지해서 캡처 트리거로 재사용한다. STATUS가
-        # "PAUSED"로 바뀌는 그 전환 순간(엣지)에만 한 번 캡처한다.
+        # ★ [캡처 트리거 변경] 아두이노가 마커에서 자연스럽게 멈추는 순간
+        # (원래 구역 카운트용으로 쓰던 그 정지)을 감지해서 캡처 트리거로 재사용한다. 
+        # STATUS가 "PAUSED"로 바뀌는 그 전환 순간(엣지)에만 한 번 캡처한다.
         last_operating_status = None
         last_telemetry_poll_time = 0
         last_telemetry_republish_time = 0
@@ -294,9 +298,7 @@ class RobotController:
                     # 카메라가 열려있다고 판단했는데 이번 프레임만 못 읽은 경우 - 다음 루프에서 재시도
                     continue
 
-                # ★ [zone_id 체계 변경] 더 이상 마커 카운트로 구역을 나누지 않고,
-                # 고정된 zone_id("a1") 하나만 사용한다. 마커는 "멈춰서 사진을 찍는
-                # 위치(트리거 지점)"로만 쓰인다.
+                # ★ [zone_id 체계 변경] GPS/마커 카운트 기반 
                 zone_name = self.cfg.get("fixed_zone_id", "a1")
 
                 # ★ show_preview=False(헤드리스)면 화면 표시 관련 연산 자체를 건너뛴다.
@@ -357,7 +359,7 @@ class RobotController:
                     if queued_count == 0:
                         print("❌ 이번 캡처에서 큐에 넣은 프레임이 하나도 없습니다.")
                     # 정지/재개 명령을 Pi가 보낼 필요 없음 - 아두이노가 자체적으로
-                    # 2초 정차 후 알아서 재출발한다.
+                    # 5초 정차 후 알아서 재출발한다.
                 # ▲▲▲▲▲ [마커 기반 캡처 트리거] 끝 ▲▲▲▲▲
                 # ══════════════════════════════════════════════════════════
 
@@ -399,7 +401,7 @@ class RobotController:
 
     def _shutdown(self):
         # 백그라운드 추론 스레드 종료 신호 + 마지막 결과 처리
-        if self._inference_thread is not None:
+        if self._inference_thread is not None: 
             self._frame_queue.put(None)
             self._inference_thread.join(timeout=5)
         self._process_ready_results()

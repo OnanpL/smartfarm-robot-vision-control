@@ -47,12 +47,13 @@ CONFIG = {
     # "화면에 연결할 수 없음" 오류 없이 실행된다.
     "show_preview": True,
     # ★ 카메라 2대 사용. zone_id/batch_id는 카메라 구분 없이 공유한다
-    "camera_indices": [0],
+    "camera_indices": [0, 1],
     # ★ 비동기(백그라운드 스레드) 추론 사용 여부. True 권장 (하트비트 끊김 방지).
     "async_inference": True,
 
     # --- 캡처 저장 경로 / 주기 ---
     "capture_dir": os.path.join(CURRENT_DIR, "captures"),
+    "save_detected_boxes": True,
     # ⚠️ [더 이상 사용되지 않음] 캡처는 이제 타이머가 아니라 아두이노의
     # 마커 정지(STATUS=PAUSED) 감지로 트리거된다 (main_controller.py 참고).
     # 이 값은 코드 어디서도 안 읽지만, 과거 설정과의 호환을 위해 남겨둠.
@@ -89,7 +90,7 @@ CONFIG = {
     # ★ 작물 메타데이터(이미지 제외) 발행 토픽. HTTP 엔드포인트 경로와 동일 문자열 사용.
     "crop_meta_topic_template": "api/upload/crop",
     # 문서 3-3: 온습도 센서 보고. 토픽명이 문서에 없어 3-1과 같은 규칙으로 임시 지정.
-    "env_topic_template": "ddalgi/robot/env",
+    "env_topic_template": "ddalgi/sensor/env",
     # 문서 4-1: 서버 -> 앱 질병 경고 (로봇은 구독/발행하지 않음, 참고용으로만 보관)
     "disease_alert_topic_template": "ddalgi/alert/disease/{user_id}",
 
@@ -98,18 +99,17 @@ CONFIG = {
     "arduino_baud": 115200,
     "arduino_reconnect_interval_sec": 5,
     "heartbeat_interval_sec": 1,
-    "telemetry_poll_interval_sec": 1,
+    "telemetry_poll_interval_sec": 0.3,
     "telemetry_republish_interval_sec": 3,
     # ★ 온습도 센서 보고 주기 (변화가 느린 값이라 텔레메트리보다 여유있게)
-    "env_report_interval_sec": 60,
+    "env_report_interval_sec": 20,
+    "env_sensor_gpio_pin": "D4", #board.D4 = BCM GPIO4. real pin = data pin
+    "env_sensor_type": "DHT22",  #"DHT11" or "DHT22"
 
     # ▼▼▼ [PAUSE-BEFORE-CAPTURE 기능] 이 블록을 지우면 기능이 꺼집니다 ▼▼▼
     "capture_pause_stabilize_sec": 0.3,
 
-    # ★★★ [zone_id 체계 변경] 마커별로 구역을 나누던 방식을 폐지했다.
-    # zone_id는 이제 "a1" 하나로 완전히 고정된다 (그 외 다른 구역 없음).
-    # 마커는 더 이상 "구역 구분"이 아니라 "멈춰서 사진을 찍는 위치(트리거 지점)"로
-    # 역할이 재정의됐다 - 즉 몇 번째 마커인지와 무관하게 항상 같은 zone_id로 보고된다.
+    # ★★★ [zone_id 체계 변경] GPS/마커 카운트 기반 zone_id는 더 이상 사용하지 않고, 모든 구역을 "a1"로 통일한다.
     "fixed_zone_id": "a1",
 
     # --- 서버 REST API (S3 업로드 + DB 로깅, 이미지 전용) ---
@@ -126,10 +126,8 @@ CONFIG = {
 }
 
 # ── 작물별 색상 프로필 ──
-# ★ disease_threshold 부활: 4클래스 전환으로 YOLO가 더 이상 병해충을 분류하지
-#   않으므로, "이번 캡처의 이상색상비율(abnormal_ratio)"이 이 값을 넘으면
-#   1차적으로 병해충으로 판단한다. color_change_alert(시간 추이 비교)는
-#   별도의 보조 신호로 계속 동작한다.
+# ★ disease_threshold : "이번 캡처의 이상색상비율(abnormal_ratio)"이 이 값을 넘으면 1차적으로 병해충으로 판단한다. 
+#   color_change_alert(시간 추이 비교)는 별도의 보조 신호로 계속 동작한다.
 CROP_COLOR_PROFILES = {
     "eggplant": {
         "hue_start": 45, "hue_end": 150, "direction": 1,
@@ -165,9 +163,4 @@ def resolve_topics(cfg):
 
 
 def zone_count_to_name(cfg, zone_count=None):
-    """
-    ★ [zone_id 체계 변경] 더 이상 마커 카운트로 구역을 나누지 않는다.
-    zone_count 인자는 (기존 호출부와의 호환을 위해) 받기만 하고 실제로는
-    쓰지 않으며, 항상 config의 fixed_zone_id("a1")를 반환한다.
-    """
     return cfg.get("fixed_zone_id", "a1")

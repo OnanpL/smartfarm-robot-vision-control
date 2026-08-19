@@ -113,7 +113,7 @@ class MotionModule:
             self.ser = None
             return None
 
-        if not line or not line.startswith("BAT"):
+        if not line or not line.startswith("ZONE"):
             return None
 
         telemetry = self._parse_telemetry(line)

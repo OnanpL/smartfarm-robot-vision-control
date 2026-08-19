@@ -2,12 +2,6 @@
 upload_module.py
 서버의 /api/upload/crop REST API 호출을 캡슐화한다.
 
-★★★ 최종 반영: HTTP는 이미지 전용 ★★★
-  기존에는 crop_id/growth_status/health_status/zone_id까지 전부 HTTP로
-  같이 보냈는데, 확정된 규격에서는 HTTP는 image + user_id + robot_id만
-  보내고, 나머지 메타데이터는 MQTT(main_controller.py의 crop_meta_topic)로
-  따로 보낸다. 두 요청 다 같은 batch_id로 묶어서, 서버가 두 데이터를
-  하나로 병합할 수 있게 한다.
 """
 
 from datetime import datetime
